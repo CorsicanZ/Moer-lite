@@ -7,10 +7,12 @@ ThinLensCamera::ThinLensCamera(const Json& json) : PerspectiveCamera(json) {
 
 Ray ThinLensCamera::sampleRay(const CameraSample& sample, Vector2f NDC) const {
 
+    return Ray();
     // TODO
 }
 
 Ray ThinLensCamera::sampleRayDifferentials(const CameraSample& sample, Vector2f NDC) const {
+    return Ray();
     // TODO
 }
 
