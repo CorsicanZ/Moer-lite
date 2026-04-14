@@ -9,7 +9,8 @@ public:
 protected:
   struct OctreeNode;
     static constexpr int ocLeafMaxSize = 64;
+    static constexpr int ocMaxDepth = 20;
     OctreeNode *
-  recursiveBuild(const AABB &aabb, const std::vector<int> &primIdxBuffer);
+  recursiveBuild(const AABB &aabb, const std::vector<int> &primIdxBuffer, int depth);
   OctreeNode * root;
 };
