@@ -1,0 +1,593 @@
+% This document is compiled using pdfLaTeX
+% You can switch XeLaTeX/pdfLaTeX/LaTeX/LuaLaTeX in Settings
+\documentclass{article}
+
+\usepackage{fontspec}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{graphicx}
+\setmainfont{TeX Gyre Pagella}
+\setsansfont{Montserrat}
+\usepackage{xeCJK}
+\setCJKmainfont{Source Han Serif SC}
+\setCJKsansfont{Source Han Sans SC}
+\setCJKmonofont{Source Han Sans SC}
+\usepackage{unicode-math}
+
+\title{图形绘制技术 2026 Lab1}
+\author{周越洋 221240041}
+\date{\today}
+
+\begin{document}
+
+\lstdefinestyle{cppstyle}{
+    language=C++,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    stringstyle=\color{red!60!black},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=8pt,
+    showstringspaces=false,
+    breaklines=true,
+    frame=single,
+    tabsize=4
+}
+
+\maketitle
+
+\section{物体与光线的求交}
+
+本节实现并测试了圆环、圆柱、圆锥三种解析几何体的光线求交。每个小节均给出代码、实现思路和测试结果。
+
+\subsection{圆环与光线求交}
+
+\subsubsection{圆环与光线求交代码}
+
+圆环求交对应的 \texttt{rayIntersectShape} 与 \texttt{fillIntersection} 代码如下：
+\begin{lstlisting}[style=cppstyle]
+bool Disk::rayIntersectShape(Ray &ray, int *primID, float *u, float *v) const {
+    Point3f originLocal = ray.origin;
+    Vector3f directionLocal = ray.direction;
+    vecmat::vec4f o{originLocal[0], originLocal[1], originLocal[2], 1.f},
+    d{directionLocal[0], directionLocal[1], directionLocal[2], 0.f};
+    o = transform.invRotate * transform.invTranslate * o;
+    d = transform.invRotate * transform.invTranslate * d;
+    o /= o[3];
+    originLocal = Point3f{o[0], o[1], o[2]};
+    directionLocal = Vector3f{d[0], d[1], d[2]};
+    Ray rayLocal(originLocal, directionLocal, ray.tNear, ray.tFar, ray.time);
+
+    if (std::abs(rayLocal.direction[2]) < EPSILON)
+        return false;
+
+    float t = -rayLocal.origin[2] / rayLocal.direction[2];
+    Point3f hitPointOnPlane = rayLocal.at(t);
+
+    if (t < ray.tNear || t > ray.tFar)
+        return false;
+    float distanceToCenter = (hitPointOnPlane - Point3f(0,0,0)).length();
+    if (distanceToCenter < innerRadius || distanceToCenter > radius)
+        return false;
+    float angle = fm::atan2(hitPointOnPlane[1], hitPointOnPlane[0]);
+    if (angle < 0) {
+        angle += 2 * PI;
+    }
+    if (angle > phiMax) {
+        return false;
+    }
+
+    ray.tFar = t;
+    *primID = 0;
+    *u = angle / (phiMax);
+    *v = (distanceToCenter - innerRadius) / (radius - innerRadius);
+
+    return true;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[style=cppstyle]
+void Disk::fillIntersection(float distance, int primID, float u, float v, Intersection *intersection) const {
+    float angle = u * phiMax;
+    float r = innerRadius + v * (radius - innerRadius);
+
+    intersection->normal = normalize(transform.toWorld(Vector3f{0, 0, 1}));
+    intersection->position = transform.toWorld(Point3f{r * fm::cos(angle), r * fm::sin(angle), 0});
+
+    intersection->shape = this;
+    intersection->distance = distance;
+    intersection->texCoord = Vector2f{u, v};
+    Vector3f tangent{1.f, 0.f, .0f};
+    Vector3f bitangent;
+    if (std::abs(dot(tangent, intersection->normal)) > .9f) {
+        tangent = Vector3f(.0f, 1.f, .0f);
+    }
+    bitangent = normalize(cross(tangent, intersection->normal));
+    tangent = normalize(cross(intersection->normal, bitangent));
+    intersection->tangent = tangent;
+    intersection->bitangent = bitangent;
+}
+\end{lstlisting}
+
+\subsubsection{圆环与光线求交思路}
+
+根据实验手册，圆环在局部空间中可视作位于 $z=0$ 平面、外半径为 \texttt{radius}、内半径为 \texttt{innerRadius}、张角为 \texttt{phiMax} 的环形区域。实现时先把光线变换到局部空间，再在局部空间判断是否命中，最后回填参数。
+
+\begin{enumerate}
+    \item 先用 \texttt{invRotate} 和 \texttt{invTranslate} 将世界空间光线映射到局部空间，得到 \texttt{rayLocal}。
+    \item 若 \texttt{rayLocal.direction.z} 近似为 0，说明光线与圆环所在平面平行，直接返回不相交。
+    \item 通过平面方程解出交点参数 $t$，并计算平面交点。
+    \item 对交点做三层合法性筛选：$t$ 是否在 \texttt{[tNear, tFar]}；半径是否落在 \texttt{[innerRadius, radius]}；方位角是否小于 \texttt{phiMax}。
+    \item 若筛选通过，更新 \texttt{ray.tFar}，并将极角和半径映射为 \texttt{u,v}。
+\end{enumerate}
+
+对于 \texttt{fillIntersection}，先由 \texttt{u,v} 反算出局部角度和半径，再恢复出局部交点位置并变换到世界空间；法线由局部法线 $(0,0,1)$ 变换得到，最后构造正交的切线与副切线用于后续着色。
+
+\subsubsection{圆环求交测试结果}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.72\textwidth]{disk-normal.png}
+    \caption{Disk 法线可视化测试结果（normal integrator）}
+\end{figure}
+
+在 \texttt{examples/lab1-test/lab1-test-disk/scene.json} 中渲染法线图，圆环轮廓和法线分布连续，内外环边界与 \texttt{innerRadius/radius} 参数一致，说明求交和交点回填逻辑正确。
+
+\subsection{圆柱与光线求交}
+
+\subsubsection{圆柱与光线求交代码}
+
+\begin{lstlisting}[style=cppstyle]
+bool Cylinder::rayIntersectShape(Ray &ray, int *primID, float *u, float *v) const {
+    Point3f originLocal = ray.origin;
+    Vector3f directionLocal = ray.direction;
+    vecmat::vec4f o{originLocal[0], originLocal[1], originLocal[2], 1.f},
+    d{directionLocal[0], directionLocal[1], directionLocal[2], 0.f};
+    o = transform.invRotate * transform.invTranslate * o;
+    d = transform.invRotate * transform.invTranslate * d;
+    o /= o[3];
+    originLocal = Point3f{o[0], o[1], o[2]};
+    directionLocal = Vector3f{d[0], d[1], d[2]};
+    Ray rayLocal(originLocal, directionLocal, ray.tNear, ray.tFar, ray.time);
+
+    float A = rayLocal.direction[0] * rayLocal.direction[0] + rayLocal.direction[1] * rayLocal.direction[1];
+    float B = 2 * (rayLocal.origin[0] * rayLocal.direction[0] + rayLocal.origin[1] * rayLocal.direction[1]);
+    float C = rayLocal.origin[0] * rayLocal.origin[0] + rayLocal.origin[1] * rayLocal.origin[1] - radius * radius;
+    if (A < EPSILON) {
+        return false;
+    }
+    float t0, t1;
+    if (!Quadratic(A, B, C, &t0, &t1))
+        return false;
+
+    auto checkTvalid = [](float t, Ray &ray, float radius, float height, float phiMax) {
+        if (t < ray.tNear || t > ray.tFar)
+            return false;
+        Point3f hitPoint = ray.at(t);
+        if (hitPoint[2] < 0 || hitPoint[2] > height)
+            return false;
+        float radial2 = hitPoint[0] * hitPoint[0] + hitPoint[1] * hitPoint[1];
+        if (radial2 > radius * radius + EPSILON)
+            return false;
+        float angle = fm::atan2(hitPoint[1], hitPoint[0]);
+        if (angle < 0) {
+            angle += 2 * PI;
+        }
+        if (angle > phiMax) {
+            return false;
+        }
+        return true;
+    };
+    float validt = -1;
+    if (checkTvalid(t0, rayLocal, radius, height, phiMax)) {
+        validt = t0;
+    }
+    else if (checkTvalid(t1, rayLocal, radius, height, phiMax)) {
+        validt = t1;
+    }
+    else {
+        return false;
+    }
+
+    ray.tFar = validt;
+
+    *primID = 0;
+    float angle = fm::atan2(rayLocal.at(validt)[1], rayLocal.at(validt)[0]);
+    if (angle < 0) {
+        angle += 2 * PI;
+    }
+    *u = angle / phiMax;
+    *v = (rayLocal.at(validt)[2] - 0) / height;
+    return true;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[style=cppstyle]
+void Cylinder::fillIntersection(float distance, int primID, float u, float v, Intersection *intersection) const {
+    float angle = u * phiMax;
+    intersection->normal = normalize(transform.toWorld(Vector3f{fm::cos(angle), fm::sin(angle), 0}));
+    intersection->position = transform.toWorld(Point3f{radius * fm::cos(angle), radius * fm::sin(angle), v * height});
+
+    intersection->shape = this;
+    intersection->distance = distance;
+    intersection->texCoord = Vector2f{u, v};
+    Vector3f tangent{1.f, 0.f, .0f};
+    Vector3f bitangent;
+    if (std::abs(dot(tangent, intersection->normal)) > .9f) {
+        tangent = Vector3f(.0f, 1.f, .0f);
+    }
+    bitangent = normalize(cross(tangent, intersection->normal));
+    tangent = normalize(cross(intersection->normal, bitangent));
+    intersection->tangent = tangent;
+    intersection->bitangent = bitangent;
+}
+\end{lstlisting}
+
+\subsubsection{圆柱与光线求交思路}
+
+圆柱在局部空间中定义为：底面在 $z=0$，顶面在 $z=\texttt{height}$，侧面满足 $x^2+y^2=\texttt{radius}^2$，并可通过 \texttt{phiMax} 控制保留的角度范围。整体流程与圆环一致，仍然是先变换光线、再判定命中、最后回填参数。
+
+\begin{enumerate}
+    \item 将光线变换到局部空间后，联立光线参数方程与圆柱侧面方程，得到一元二次方程系数 \texttt{A,B,C}。
+    \item 用 \texttt{Quadratic} 求出两个候选根 \texttt{t0,t1}。
+    \item 使用 \texttt{checkTvalid} 对每个候选根做范围校验：$t$ 范围、$z$ 是否落在圆柱高度范围、半径约束、角度约束。
+    \item 取首个合法根作为最终命中，更新 \texttt{ray.tFar}，并计算 \texttt{u,v}。
+\end{enumerate}
+
+\texttt{fillIntersection} 中，位置由 $(\cos\theta,\sin\theta,v)$ 直接重建，法线取侧面法线方向 $(\cos\theta,\sin\theta,0)$ 并变换到世界空间，再构建切线基。
+
+\subsubsection{圆柱求交测试结果}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.72\textwidth]{cylinder-normal.png}
+    \caption{Cylinder 法线可视化测试结果（normal integrator）}
+\end{figure}
+
+在 \texttt{examples/lab1-test/lab1-test-cylinder/scene.json} 中测试，圆柱侧面的法线色带沿周向连续变化，顶部和底部高度截断正确，说明几何方程求解与范围筛选有效。
+
+\subsection{圆锥与光线求交}
+
+\subsubsection{圆锥与光线求交代码}
+
+\begin{lstlisting}[style=cppstyle]
+bool Cone::rayIntersectShape(Ray &ray, int *primID, float *u, float *v) const {
+    Point3f originLocal = ray.origin;
+    Vector3f directionLocal = ray.direction;
+    vecmat::vec4f o{originLocal[0], originLocal[1], originLocal[2], 1.f},
+    d{directionLocal[0], directionLocal[1], directionLocal[2], 0.f};
+    o = transform.invRotate * transform.invTranslate * o;
+    d = transform.invRotate * transform.invTranslate * d;
+    o /= o[3];
+    originLocal = Point3f{o[0], o[1], o[2]};
+    directionLocal = Vector3f{d[0], d[1], d[2]};
+    Ray rayLocal(originLocal, directionLocal, ray.tNear, ray.tFar, ray.time);
+
+    float k = radius / height;
+    float k2 = k * k;
+    float hz = height - originLocal[2];
+    float A = directionLocal[0] * directionLocal[0] + directionLocal[1] * directionLocal[1] - k2 * directionLocal[2] * directionLocal[2];
+    float B = 2 * (originLocal[0] * directionLocal[0] + originLocal[1] * directionLocal[1] + k2 * hz * directionLocal[2]);
+    float C = originLocal[0] * originLocal[0] + originLocal[1] * originLocal[1] - k2 * hz * hz;
+    if (std::abs(A) < EPSILON) {
+        return false;
+    }
+    float t0, t1;
+    if (!Quadratic(A, B, C, &t0, &t1))
+        return false;
+
+    auto checkTvalid = [](float t, Ray &ray, float radius, float height, float phiMax) {
+        if (t < ray.tNear || t > ray.tFar)
+            return false;
+        Point3f hitPoint = ray.at(t);
+        if (hitPoint[2] < 0 || hitPoint[2] > height)
+            return false;
+        float radial2 = hitPoint[0] * hitPoint[0] + hitPoint[1] * hitPoint[1];
+        float localRadius = (1.f - hitPoint[2] / height) * radius;
+        if (radial2 > localRadius * localRadius + EPSILON)
+            return false;
+        float angle = fm::atan2(hitPoint[1], hitPoint[0]);
+        if (angle < 0) {
+            angle += 2 * PI;
+        }
+        if (angle > phiMax) {
+            return false;
+        }
+        return true;
+    };
+    float validt = -1;
+    if (checkTvalid(t0, rayLocal, radius, height, phiMax)) {
+        validt = t0;
+    }
+    else if (checkTvalid(t1, rayLocal, radius, height, phiMax)) {
+        validt = t1;
+    }
+    else {
+        return false;
+    }
+
+    ray.tFar = validt;
+    *primID = 0;
+    float angle = fm::atan2(rayLocal.at(validt)[1], rayLocal.at(validt)[0]);
+    if (angle < 0) {
+        angle += 2 * PI;
+    }
+    *u = angle / phiMax;
+    *v = (rayLocal.at(validt)[2] - 0) / height;
+    return true;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[style=cppstyle]
+void Cone::fillIntersection(float distance, int primID, float u, float v, Intersection *intersection) const {
+    float angle = u * phiMax;
+    float z = v * height;
+    float localRadius = (1.f - v) * radius;
+    Point3f localPos{localRadius * fm::cos(angle), localRadius * fm::sin(angle), z};
+    intersection->position = transform.toWorld(localPos);
+
+    float k = radius / height;
+    float k2 = k * k;
+    Vector3f localNormal{localPos[0], localPos[1], k2 * (height - localPos[2])};
+    intersection->normal = normalize(transform.toWorld(localNormal));
+
+    intersection->shape = this;
+    intersection->distance = distance;
+    intersection->texCoord = Vector2f{u, v};
+    Vector3f tangent{1.f, 0.f, .0f};
+    Vector3f bitangent;
+    if (std::abs(dot(tangent, intersection->normal)) > .9f) {
+        tangent = Vector3f(.0f, 1.f, .0f);
+    }
+    bitangent = normalize(cross(tangent, intersection->normal));
+    tangent = normalize(cross(intersection->normal, bitangent));
+    intersection->tangent = tangent;
+    intersection->bitangent = bitangent;
+}
+\end{lstlisting}
+
+\subsubsection{圆锥与光线求交思路}
+
+圆锥在局部空间中的隐式方程为
+\[
+x^2+y^2=\left(\frac{r}{h}\right)^2(h-z)^2,\quad z\in[0,h].
+\]
+因此实现时同样先将光线变换到局部空间，再通过隐式方程联立得到候选交点并筛选。
+
+\begin{enumerate}
+    \item 根据圆锥隐式方程构造二次项系数 \texttt{A,B,C} 并求根。
+    \item 与圆柱类似，对两个候选根逐一做合法性检查：$t$ 范围、$z$ 高度范围、当前高度对应半径约束、角度约束。
+    \item 取首个合法交点作为命中结果，更新 \texttt{ray.tFar} 并计算 \texttt{u,v}。
+\end{enumerate}
+
+\texttt{fillIntersection} 中先通过 \texttt{u,v} 反推局部交点，再使用圆锥隐式函数梯度构造法线并变换到世界空间，最后补齐切线基。
+
+\subsubsection{圆锥求交测试结果}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.72\textwidth]{cone-normal.png}
+    \caption{Cone 法线可视化测试结果（normal integrator）}
+\end{figure}
+
+在 \texttt{examples/lab1-test/lab1-test-cone/scene.json} 下测试，圆锥侧面法线变化平滑，顶点附近无明显断裂，且角度裁剪范围满足 \texttt{phiMax} 设定。
+
+\section{薄透镜相机}
+
+\subsection{薄透镜相机代码}
+
+\begin{lstlisting}[style=cppstyle]
+Ray ThinLensCamera::sampleRay(const CameraSample& sample, Vector2f NDC) const {
+    float x = (NDC[0] - 0.5f) * film->size[0] + sample.xy[0],
+    y = (0.5f - NDC[1]) * film->size[1] + sample.xy[1];
+
+    float tanHalfFov = fm::tan(verticalFov * 0.5f);
+    float z = -film->size[1] * 0.5f / tanHalfFov;
+
+    float k = focalDistance / -z;
+    Point3f pFocus = Point3f{x * k, y * k, z * k};
+
+    float sampleLensRadius = lensRadius * fm::sqrt(sample.lens[0]);
+    float sampleLensTheta = 2 * PI * sample.lens[1];
+    Point3f pLens = Point3f{
+        sampleLensRadius * fm::cos(sampleLensTheta),
+        sampleLensRadius * fm::sin(sampleLensTheta), 0
+    };
+
+    Vector3f direction = normalize(transform.toWorld(pFocus - pLens));
+    Point3f origin = transform.toWorld(pLens);
+    return Ray(origin, direction, tNear, tFar, timeStart);
+}
+\end{lstlisting}
+
+\begin{lstlisting}[style=cppstyle]
+Ray ThinLensCamera::sampleRayDifferentials(const CameraSample& sample, Vector2f NDC) const {
+    float x = (NDC[0] - 0.5f) * film->size[0] + sample.xy[0],
+          y = (0.5f - NDC[1]) * film->size[1] + sample.xy[1];
+
+    float tanHalfFov = fm::tan(verticalFov * 0.5f);
+    float z = -film->size[1] * 0.5f / tanHalfFov;
+
+    float k = focalDistance / -z;
+    Point3f pFocus = Point3f{x * k, y * k, z * k};
+    Point3f pFocusX = Point3f{(x + 1.f) * k, y * k, z * k};
+    Point3f pFocusY = Point3f{x * k, (y + 1.f) * k, z * k};
+
+    float sampleLensRadius = lensRadius * fm::sqrt(sample.lens[0]);
+    float sampleLensTheta = 2 * PI * sample.lens[1];
+    Point3f pLens = Point3f{
+        sampleLensRadius * fm::cos(sampleLensTheta),
+        sampleLensRadius * fm::sin(sampleLensTheta), 0
+    };
+
+    Point3f origin = transform.toWorld(pLens);
+    Vector3f direction = normalize(transform.toWorld(pFocus - pLens));
+    Vector3f directionX = normalize(transform.toWorld(pFocusX - pLens));
+    Vector3f directionY = normalize(transform.toWorld(pFocusY - pLens));
+
+    Ray ret = Ray(origin, direction, tNear, tFar, timeStart);
+    ret.hasDifferentials = true;
+    ret.originX = origin;
+    ret.originY = origin;
+    ret.directionX = directionX;
+    ret.directionY = directionY;
+    return ret;
+}
+\end{lstlisting}
+
+\subsection{薄透镜相机实现思路}
+
+薄透镜相机的核心是“像素位置先映射到焦平面，再从随机镜头位置射向焦点”。具体流程如下：
+\begin{enumerate}
+    \item 用像素采样位置和视场角求出相机空间中的成像平面坐标。
+    \item 按 \texttt{focalDistance} 将该点投影到焦平面，得到 \texttt{pFocus}。
+    \item 在半径为 \texttt{lensRadius} 的镜头圆盘上进行均匀采样，得到 \texttt{pLens}。
+    \item 以镜头点为光线起点、焦点方向为光线方向，生成主光线并变换到世界空间。
+\end{enumerate}
+
+对于 \texttt{sampleRayDifferentials}，在焦平面上额外构造 $x+1$ 与 $y+1$ 的两个焦点，保持同一镜头采样点不变，从而得到方向微分 \texttt{directionX/directionY}，供纹理过滤与抗锯齿使用。
+
+\subsection{薄透镜相机测试结果}
+
+测试场景使用 \texttt{examples/cornell-box-dof/scene.json}，关键参数为：
+\begin{itemize}
+    \item \texttt{camera.type = thinlens}
+    \item \texttt{lensRadius = 0.5}
+    \item \texttt{focalDistance = 6.5}
+\end{itemize}
+
+测试结论：渲染时焦距对应平面附近物体保持清晰，前后景产生景深模糊；当减小 \texttt{lensRadius} 时景深减弱，退化为接近小孔成像的效果，符合薄透镜模型预期。
+
+\section{Octree 加速结构}
+
+\subsection{Octree 关键代码}
+
+\begin{lstlisting}[style=cppstyle]
+Octree::OctreeNode * Octree::recursiveBuild(const AABB &aabb,
+                       const std::vector<int> &primIdxBuffer, int depth) {
+    auto node = new OctreeNode();
+    node->boundingBox = aabb;
+
+    if (depth >= ocMaxDepth || primIdxBuffer.size() <= ocLeafMaxSize) {
+      node->primCount = static_cast<int>(primIdxBuffer.size());
+      node->primIdxBuffer = primIdxBuffer;
+      return node;
+    }
+
+    std::vector<AABB> subBoxes;
+    subBoxes.reserve(8);
+    const Point3f center = aabb.Center();
+    for (int i = 0; i < 8; ++i) {
+        const Point3f subMin(
+            (i & 1) ? center[0] : aabb.pMin[0],
+            (i & 2) ? center[1] : aabb.pMin[1],
+            (i & 4) ? center[2] : aabb.pMin[2]
+        );
+        const Point3f subMax(
+            (i & 1) ? aabb.pMax[0] : center[0],
+            (i & 2) ? aabb.pMax[1] : center[1],
+            (i & 4) ? aabb.pMax[2] : center[2]
+        );
+        subBoxes.emplace_back(subMin, subMax);
+    }
+
+    std::vector<std::vector<int>> subBuffers(8);
+    for (int i = 0; i < 8; ++i) {
+        for (int index : primIdxBuffer) {
+          if (shapes[index]->getAABB().Overlap(subBoxes[i])) {
+            subBuffers[i].push_back(index);
+          }
+        }
+    }
+
+    for (int i = 0; i < 8; ++i) {
+        if (subBuffers[i].size() == primIdxBuffer.size()) {
+          node->primCount = static_cast<int>(primIdxBuffer.size());
+          node->primIdxBuffer = primIdxBuffer;
+          return node;
+        }
+    }
+
+    for (int i = 0; i < 8; ++i) {
+        if (subBuffers[i].empty()) {
+          node->subNodes[i] = nullptr;
+          continue;
+        }
+        node->subNodes[i].reset(recursiveBuild(subBoxes[i], subBuffers[i], depth + 1));
+    }
+    return node;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[style=cppstyle]
+bool Octree::rayIntersect(Ray &ray, int *geomID, int *primID, float *u, float *v) const {
+  if (root == nullptr) {
+    return false;
+  }
+
+  bool hit = false;
+  std::queue<const OctreeNode *> nodeQueue;
+  nodeQueue.push(root);
+
+  while (!nodeQueue.empty()) {
+    const OctreeNode *node = nodeQueue.front();
+    nodeQueue.pop();
+
+    if (node == nullptr || !node->boundingBox.RayIntersect(ray)) {
+      continue;
+    }
+
+    if (node->primCount >= 0) {
+      for (int i = 0; i < node->primCount; ++i) {
+        const int shapeIdx = node->primIdxBuffer[i];
+        if (shapes[shapeIdx]->rayIntersectShape(ray, primID, u, v)) {
+          *geomID = shapes[shapeIdx]->geometryID;
+          hit = true;
+        }
+      }
+      continue;
+    }
+
+    for (const auto &subNode : node->subNodes) {
+      if (subNode) {
+        nodeQueue.push(subNode.get());
+      }
+    }
+  }
+  return hit;
+}
+\end{lstlisting}
+
+\subsection{Octree 实现思路}
+
+Octree 的构建和查询都围绕“尽量减少无关求交”这一目标展开：
+\begin{enumerate}
+    \item \textbf{递归构建：} 从场景总包围盒开始，按中心点切分成 8 个子包围盒。
+    \item \textbf{物体分配：} 每个物体按 AABB 重叠关系分发到可能命中的子节点缓冲区。
+    \item \textbf{停止条件：} 达到最大深度、叶子最大容量，或出现“某子节点包含了全部物体”的退化情况时停止细分并转为叶节点。
+    \item \textbf{求交遍历：} 使用队列广度优先遍历；先做节点包围盒求交剔除，仅在叶节点对存储物体做真实几何求交。
+\end{enumerate}
+
+这种做法可以把大量与当前光线无关的几何体排除在叶节点之外，从而降低总求交次数。
+
+\subsection{Octree 测试结果}
+
+线性结构测试图（\texttt{examples/lab1-test/monkey/scene.json}）：
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.72\textwidth]{monkey.png}
+    \caption{Linear acceleration 渲染结果}
+\end{figure}
+
+Octree 测试图（\texttt{examples/lab1-test/lab1-test-octree/scene.json}）：
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.72\textwidth]{monkey-octree.png}
+    \caption{Octree acceleration 渲染结果}
+\end{figure}
+
+两种加速结构输出图像内容一致，说明 Octree 查询流程与基础求交逻辑兼容；在三角形数量增大时，Octree 能显著减少叶节点内候选几何体数量，具备加速价值。
+
+\end{document}

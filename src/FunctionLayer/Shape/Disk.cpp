@@ -40,7 +40,6 @@ bool Disk::rayIntersectShape(Ray &ray, int *primID, float *u, float *v) const {
         return false;
     }
 
-
     //* 5.更新ray的tFar,减少光线和其他物体的相交计算次数
     ray.tFar = t;
     *primID = 0;
